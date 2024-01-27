@@ -40,8 +40,6 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 
-add_library(LibCxx ${SOURCE_FILES})
-
 qt_add_executable(MainCxx main.cpp)
 set_target_properties(MainCxx PROPERTIES
     WIN32_EXECUTABLE TRUE
@@ -56,3 +54,14 @@ target_link_libraries(MainCxx PRIVATE
     Taskflow::Taskflow TIFF::TIFF
     Vulkan::Vulkan
 )
+
+install(TARGETS MainCxx
+    BUNDLE  DESTINATION .
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+qt_generate_deploy_app_script(
+    TARGET MainCxx
+    OUTPUT_SCRIPT deploy_script
+    NO_UNSUPPORTED_PLATFORM_ERROR
+)
+install(SCRIPT ${deploy_script})
