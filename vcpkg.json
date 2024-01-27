@@ -12,6 +12,7 @@
                 "png",
                 "sql",
                 "sql-sqlite",
+                "thread",
                 "vulkan",
                 "zstd"
             ]

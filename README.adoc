@@ -22,7 +22,7 @@ git clone --recurse-submodules https://github.com/mehmetoguzderin/cmake-qt-vcpkg
 * Clang-Format
 * Clang-Tidy
 
-The following subsections only contain installs for packages that cause errors during build without clear instructions, especially from localization and windowing libraries.
+The following subsections only contain installs for packages that cause errors during build without clear instructions, especially from localization and windowing libraries. Please closely follow vcpkg outputs for any potential additional dependencies that may be necessary, as some packages can have specific requirements depending on the platform.
 
 ==== macOS
 
@@ -39,6 +39,7 @@ ln -s "$(brew --prefix llvm)/bin/clang-tidy" "/usr/local/bin/clang-tidy"
 ==== Ubuntu
 
 * sudo apt install autoconf autoconf-archive automake libegl1-mesa-dev libgl-dev libgl1-mesa-dev libtool libvulkan-dev libvulkan1 libwayland-dev libx11-dev libx11-xcb-dev libxcb-randr0-dev libxcb-xinerama0-dev libxcb-xtest0-dev libxcb1 libxcb1-dev libxcursor-dev libxi-dev libxinerama-dev libxkbcommon-dev libxkbcommon-x11-dev libxrandr-dev xcb-proto
+* sudo apt-get install '^libxcb.*-dev' libx11-xcb-dev libglu1-mesa-dev libxrender-dev libx11* libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libegl1-mesa-dev
 
 === Configure
 
