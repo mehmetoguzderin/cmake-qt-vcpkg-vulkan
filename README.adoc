@@ -6,6 +6,12 @@ Based on:
 * https://github.com/google/shaderc
 * https://code.qt.io/cgit/qt/qtbase.git/tree/examples/vulkan/hellovulkanwidget
 
+== Cloning
+
+....
+git clone --recurse-submodules https://github.com/mehmetoguzderin/cmake-qt-vcpkg-vulkan
+....
+
 == Building
 
 === Prerequisites
