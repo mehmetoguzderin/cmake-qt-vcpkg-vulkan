@@ -1,0 +1,75 @@
+Checks: >
+  *,
+  -android-*,
+  -cert-*,
+  -cppcoreguidelines-*,
+  -fuchsia-*,
+  -google-*,
+  -hicpp-*,
+  -llvm-*,
+  -objc-*,
+  -readability-magic-numbers,
+  -zircon-*
+
+CheckOptions:
+  # Modernize checks
+  - key: modernize-use-nullptr
+    value: "1"
+  - key: modernize-use-override
+    value: "1"
+  - key: modernize-make-smart-pointer
+    value: "1"
+  - key: modernize-use-auto
+    value: "1"
+  - key: modernize-use-using
+    value: "1"
+  - key: modernize-use-transparent-functors
+    value: "1"
+  - key: modernize-pass-by-value
+    value: "1"
+  - key: modernize-avoid-c-arrays
+    value: "1"
+  - key: modernize-use-emplace
+    value: "1"
+  - key: modernize-avoid-bind
+    value: "1"
+  - key: modernize-use-nodiscard
+    value: "1"
+  - key: modernize-use-noexcept
+    value: "1"
+  - key: modernize-use-trailing-return-type
+    value: "1"
+  - key: modernize-concat-nested-namespaces
+    value: "1"
+
+  # Performance checks
+  - key: performance-for-range-copy
+    value: "1"
+  - key: performance-unnecessary-value-param
+    value: "1"
+  - key: performance-noexcept-move-constructor
+    value: "1"
+
+  # Readability checks
+  - key: readability-identifier-naming
+    value: "1"
+  - key: readability-redundant-smartptr-get
+    value: "1"
+  - key: readability-container-size-empty
+    value: "1"
+  - key: readability-implicit-bool-conversion
+    value: "1"
+  - key: readability-named-parameter
+    value: "1"
+
+  # Miscellaneous checks
+  - key: bugprone-exception-escape
+    value: "1"
+  - key: bugprone-incorrect-roundings
+    value: "1"
+  - key: bugprone-integer-division
+    value: "1"
+
+WarningsAsErrors: "*"
+HeaderFilterRegex: ".*"
+FormatStyle: "file"

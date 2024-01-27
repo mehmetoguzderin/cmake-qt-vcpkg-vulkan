@@ -1,0 +1,54 @@
+= CMake + Qt + Vcpkg + Vulkan
+
+Based on:
+
+* https://github.com/charles-lunarg/vk-bootstrap
+* https://github.com/google/shaderc
+* https://code.qt.io/cgit/qt/qtbase.git/tree/examples/vulkan/hellovulkanwidget
+
+== Building
+
+=== Prerequisites
+
+* CMake 3.20
+* C++20 compiler
+* Clangd
+* Clang-Format
+* Clang-Tidy
+
+==== macOS
+
+* brew install autoconf-archive automake libtool
+* Vulkan SDK
++
+....
+export CPATH=/usr/local/include:$CPATH
+export C_INCLUDE_PATH=/usr/local/include:$C_INCLUDE_PATH
+export CPLUS_INCLUDE_PATH=/usr/local/include:$CPLUS_INCLUDE_PATH
+ln -s "$(brew --prefix llvm)/bin/clang-tidy" "/usr/local/bin/clang-tidy"
+....
+
+=== Configure
+
+....
+mkdir build
+cmake -DCMAKE_BUILD_TYPE=Release -S ./ -B ./build
+....
+
+or
+
+....
+cmake -G Ninja -DCMAKE_MAKE_PROGRAM=ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release -S ./ -B ./build
+....
+
+=== Compile
+
+....
+cmake --build ./build --config Release
+....
+
+=== Run
+
+....
+./build/MainCxx
+....

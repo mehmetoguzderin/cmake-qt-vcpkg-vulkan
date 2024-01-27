@@ -1,0 +1,27 @@
+{
+    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+    "dependencies": [
+        "dcmtk",
+        {
+            "name": "qtbase",
+            "features": [
+                "jpeg",
+                "network",
+                "opengl",
+                "pcre2",
+                "png",
+                "sql",
+                "sql-sqlite",
+                "thread",
+                "vulkan",
+                "zstd"
+            ]
+        },
+        "shaderc",
+        "spirv-cross",
+        "spirv-reflect",
+        "sqlite3",
+        "tiff",
+        "vulkan"
+    ]
+}
