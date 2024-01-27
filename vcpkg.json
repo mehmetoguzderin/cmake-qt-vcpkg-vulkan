@@ -12,7 +12,6 @@
                 "png",
                 "sql",
                 "sql-sqlite",
-                "thread",
                 "vulkan",
                 "zstd"
             ]
@@ -21,6 +20,7 @@
         "spirv-cross",
         "spirv-reflect",
         "sqlite3",
+        "taskflow",
         "tiff",
         "vulkan"
     ]
