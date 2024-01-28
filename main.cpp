@@ -729,10 +729,10 @@ void TriangleRenderer::startNextFrame() {
   computeBarrier.subresourceRange.levelCount = 1;
   computeBarrier.subresourceRange.baseArrayLayer = 0;
   computeBarrier.subresourceRange.layerCount = 1;
-  computeBarrier.srcAccessMask = 0;
+  computeBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
   computeBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 
-  m_devFuncs->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+  m_devFuncs->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                    0,          // No dependency flags
                                    0, nullptr, // No memory barriers
@@ -772,7 +772,7 @@ void TriangleRenderer::startNextFrame() {
   // Image layout transition barrier
   VkImageMemoryBarrier renderBarrier{};
   renderBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  renderBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  renderBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
   renderBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
   renderBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   renderBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -786,7 +786,7 @@ void TriangleRenderer::startNextFrame() {
   renderBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
   // Apply the barrier
-  m_devFuncs->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+  m_devFuncs->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                                    0,          // No dependency flags
                                    0, nullptr, // No memory barriers
