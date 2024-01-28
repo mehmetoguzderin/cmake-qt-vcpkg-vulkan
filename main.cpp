@@ -702,6 +702,20 @@ void TriangleRenderer::startNextFrame() {
   VkCommandBuffer cb = m_window->currentCommandBuffer();
   QSize sz = m_window->swapChainImageSize();
 
+  VkCommandBufferAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  allocInfo.commandPool = m_window->graphicsCommandPool();
+  allocInfo.commandBufferCount = 1;
+
+  VkCommandBuffer computeCommandBuffer;
+  m_devFuncs->vkAllocateCommandBuffers(dev, &allocInfo, &computeCommandBuffer);
+
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  m_devFuncs->vkBeginCommandBuffer(computeCommandBuffer, &beginInfo);
+
   // Image layout transition barrier
   VkImageMemoryBarrier computeBarrier{};
   computeBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -738,6 +752,23 @@ void TriangleRenderer::startNextFrame() {
   m_devFuncs->vkCmdDispatch(cb, (uint32_t)ceil(sz.width() / float(8)),
                             (uint32_t)ceil(sz.height() / float(8)), 1);
 
+  // End compute command buffer
+  m_devFuncs->vkEndCommandBuffer(computeCommandBuffer);
+
+  // Submit compute command buffer and wait for completion
+  VkSubmitInfo computeSubmitInfo{};
+  computeSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  computeSubmitInfo.commandBufferCount = 1;
+  computeSubmitInfo.pCommandBuffers = &computeCommandBuffer;
+
+  VkQueue computeQueue;
+  m_devFuncs->vkGetDeviceQueue(dev, 0, 0, &computeQueue);
+  m_devFuncs->vkQueueSubmit(computeQueue, 1, &computeSubmitInfo,
+                            VK_NULL_HANDLE);
+  m_devFuncs->vkQueueWaitIdle(computeQueue);
+
+  m_devFuncs->vkDeviceWaitIdle(dev);
+
   // Image layout transition barrier
   VkImageMemoryBarrier renderBarrier{};
   renderBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -755,7 +786,7 @@ void TriangleRenderer::startNextFrame() {
   renderBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
   // Apply the barrier
-  m_devFuncs->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+  m_devFuncs->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                                    0,          // No dependency flags
                                    0, nullptr, // No memory barriers
@@ -825,6 +856,7 @@ void TriangleRenderer::startNextFrame() {
   m_devFuncs->vkCmdEndRenderPass(cmdBuf);
 
   m_window->frameReady();
+  m_devFuncs->vkDeviceWaitIdle(dev);
   m_window->requestUpdate(); // render continuously, throttled by the
                              // presentation rate
 }
