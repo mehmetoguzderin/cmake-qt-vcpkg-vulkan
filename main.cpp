@@ -839,6 +839,9 @@ public:
 };
 
 void VulkanRenderer::reinitializeResources() {
+  m_window->vulkanInstance()
+      ->deviceFunctions(m_window->device())
+      ->vkDeviceWaitIdle(m_window->device());
   releaseSwapChainResources();
   releaseResources();
   initResources();
