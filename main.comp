@@ -1,0 +1,21 @@
+#version 460
+
+layout(binding = 0, rgba32f) uniform image2D textureImage;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+void main() {
+  uvec3 globalID = gl_GlobalInvocationID.xyz;
+  if (globalID.x >= imageSize(textureImage).x ||
+      globalID.y >= imageSize(textureImage).y) {
+    return;
+  }
+
+  uvec3 localID = gl_LocalInvocationID.xyz;
+
+  vec4 pixelValue =
+      vec4(float(globalID.x) / float(imageSize(textureImage).x),
+           float(globalID.y) / float(imageSize(textureImage).y), 1.0, 1.0);
+
+  imageStore(textureImage, ivec2(globalID.xy), pixelValue);
+}

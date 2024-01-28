@@ -1,31 +1,4 @@
-#include <fstream>
-#include <iostream>
-
-#include <QApplication>
-#include <QCommandLineParser>
-#include <QDialog>
-#include <QDialogButtonBox>
-#include <QFile>
-#include <QFileDialog>
-#include <QLCDNumber>
-#include <QLibraryInfo>
-#include <QLoggingCategory>
-#include <QMessageBox>
-#include <QPlainTextEdit>
-#include <QPointer>
-#include <QPushButton>
-#include <QTabWidget>
-#include <QTextEdit>
-#include <QVBoxLayout>
-#include <QVulkanFunctions>
-#include <QVulkanInstance>
-#include <QVulkanWindow>
-#include <QWidget>
-
-#include <qtmetamacros.h>
-
-#include <shaderc/shaderc.hpp>
-#include <spirv_cross/spirv_glsl.hpp>
+#include "main.hpp"
 
 class TriangleRenderer : public QVulkanWindowRenderer {
 public:
@@ -50,6 +23,11 @@ protected:
   VkDescriptorBufferInfo
       m_uniformBufInfo[QVulkanWindow::MAX_CONCURRENT_FRAME_COUNT];
 
+  VkImage m_textureImage = VK_NULL_HANDLE;
+  VkDeviceMemory m_textureImageMemory = VK_NULL_HANDLE;
+  VkImageView m_textureImageView = VK_NULL_HANDLE;
+  VkSampler m_textureSampler = VK_NULL_HANDLE;
+
   VkDescriptorPool m_descPool = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_descSetLayout = VK_NULL_HANDLE;
   VkDescriptorSet m_descSet[QVulkanWindow::MAX_CONCURRENT_FRAME_COUNT];
@@ -57,6 +35,12 @@ protected:
   VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
   VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
   VkPipeline m_pipeline = VK_NULL_HANDLE;
+
+  VkDescriptorPool m_computeDescPool = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_computeDescSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSet m_computeDescSet;
+  VkPipelineLayout m_computePipelineLayout = VK_NULL_HANDLE;
+  VkPipeline m_computePipeline = VK_NULL_HANDLE;
 
   QMatrix4x4 m_proj;
   float m_rotation = 0.0f;
@@ -73,6 +57,15 @@ static inline VkDeviceSize aligned(VkDeviceSize v, VkDeviceSize byteAlign) {
 }
 
 TriangleRenderer::TriangleRenderer(QVulkanWindow *w, bool msaa) : m_window(w) {
+  QVulkanInfoVector<QVulkanExtension> supportedExtensions =
+      m_window->supportedDeviceExtensions();
+  if (supportedExtensions.contains(
+          QByteArrayLiteral("VK_KHR_portability_subset"))) {
+    qDebug("Enabling VK_KHR_portability_subset");
+    QByteArrayList extensions;
+    extensions.append(QByteArrayLiteral("VK_KHR_portability_subset"));
+    m_window->setDeviceExtensions(extensions);
+  }
   if (msaa) {
     const QList<int> counts = w->supportedSampleCounts();
     qDebug() << "Supported sample counts:" << counts;
@@ -84,56 +77,6 @@ TriangleRenderer::TriangleRenderer(QVulkanWindow *w, bool msaa) : m_window(w) {
       }
     }
   }
-}
-
-std::vector<uint32_t> compile_file(const std::string &source_name,
-                                   shaderc_shader_kind kind) {
-  std::string glsl_code;
-  {
-    shaderc::Compiler compiler;
-    shaderc::CompileOptions options;
-
-    options.AddMacroDefinition("MY_DEFINE", "1");
-    options.SetOptimizationLevel(shaderc_optimization_level_performance);
-
-    std::ifstream source_file(source_name);
-    std::string source{std::istreambuf_iterator<char>(source_file),
-                       std::istreambuf_iterator<char>()};
-
-    shaderc::SpvCompilationResult module =
-        compiler.CompileGlslToSpv(source, kind, source_name.c_str(), options);
-
-    if (module.GetCompilationStatus() != shaderc_compilation_status_success) {
-      std::cerr << module.GetErrorMessage();
-      return std::vector<uint32_t>();
-    }
-    std::vector<uint32_t> spirv_code(module.cbegin(), module.cend());
-    spirv_cross::CompilerGLSL glsl_compiler(spirv_code);
-
-    // Set GLSL version and other necessary options
-    spirv_cross::CompilerGLSL::Options glsl_options;
-    glsl_options.version = 460;
-    glsl_options.vulkan_semantics = true; // Enable Vulkan semantics
-    glsl_compiler.set_common_options(glsl_options);
-
-    // Convert and retrieve the GLSL code
-    glsl_code = glsl_compiler.compile();
-  }
-  shaderc::Compiler final_compiler;
-  shaderc::CompileOptions final_options;
-
-  final_options.AddMacroDefinition("MY_DEFINE", "1");
-  final_options.SetOptimizationLevel(shaderc_optimization_level_performance);
-
-  shaderc::SpvCompilationResult final_module = final_compiler.CompileGlslToSpv(
-      glsl_code, kind, source_name.c_str(), final_options);
-
-  if (final_module.GetCompilationStatus() !=
-      shaderc_compilation_status_success) {
-    std::cerr << final_module.GetErrorMessage();
-    return std::vector<uint32_t>();
-  }
-  return {final_module.cbegin(), final_module.cend()};
 }
 
 VkShaderModule TriangleRenderer::createShader(const QString &name,
@@ -161,22 +104,6 @@ void TriangleRenderer::initResources() {
 
   VkDevice dev = m_window->device();
   m_devFuncs = m_window->vulkanInstance()->deviceFunctions(dev);
-
-  // Prepare the vertex and uniform data. The vertex data will never
-  // change so one buffer is sufficient regardless of the value of
-  // QVulkanWindow::CONCURRENT_FRAME_COUNT. Uniform data is changing per
-  // frame however so active frames have to have a dedicated copy.
-
-  // Use just one memory allocation and one buffer. We will then specify the
-  // appropriate offsets for uniform buffers in the VkDescriptorBufferInfo.
-  // Have to watch out for
-  // VkPhysicalDeviceLimits::minUniformBufferOffsetAlignment, though.
-
-  // The uniform buffer is not strictly required in this example, we could
-  // have used push constants as well since our single matrix (64 bytes) fits
-  // into the spec mandated minimum limit of 128 bytes. However, once that
-  // limit is not sufficient, the per-frame buffers, as shown below, will
-  // become necessary.
 
   const int concurrentFrameCount = m_window->concurrentFrameCount();
   const VkPhysicalDeviceLimits *pdevLimits =
@@ -230,6 +157,26 @@ void TriangleRenderer::initResources() {
   }
   m_devFuncs->vkUnmapMemory(dev, m_bufMem);
 
+  VkSamplerCreateInfo samplerInfo = {};
+  samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  samplerInfo.magFilter = VK_FILTER_LINEAR;
+  samplerInfo.minFilter = VK_FILTER_LINEAR;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.anisotropyEnable = VK_TRUE;
+  samplerInfo.maxAnisotropy = 16;
+  samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+  samplerInfo.unnormalizedCoordinates = VK_FALSE;
+  samplerInfo.compareEnable = VK_FALSE;
+  samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+  if (m_devFuncs->vkCreateSampler(m_window->device(), &samplerInfo, nullptr,
+                                  &m_textureSampler) != VK_SUCCESS) {
+    qFatal("failed to create texture sampler");
+  }
+
   VkVertexInputBindingDescription vertexBindingDesc = {
       0, // binding
       5 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
@@ -252,26 +199,52 @@ void TriangleRenderer::initResources() {
   vertexInputInfo.pVertexAttributeDescriptions = vertexAttrDesc;
 
   // Set up descriptor set and its layout.
-  VkDescriptorPoolSize descPoolSizes = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                        uint32_t(concurrentFrameCount)};
-  VkDescriptorPoolCreateInfo descPoolInfo;
-  memset(&descPoolInfo, 0, sizeof(descPoolInfo));
-  descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-  descPoolInfo.maxSets = concurrentFrameCount;
-  descPoolInfo.poolSizeCount = 1;
-  descPoolInfo.pPoolSizes = &descPoolSizes;
+  std::array<VkDescriptorPoolSize, 3> poolSizes{};
+  poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  poolSizes[0].descriptorCount = concurrentFrameCount;
+
+  poolSizes[1].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+  poolSizes[1].descriptorCount = concurrentFrameCount;
+
+  poolSizes[2].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+  poolSizes[2].descriptorCount = concurrentFrameCount;
+
+  VkDescriptorPoolCreateInfo descPoolInfo = {
+      VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+      nullptr,
+      0,
+      static_cast<uint32_t>(concurrentFrameCount),
+      static_cast<uint32_t>(poolSizes.size()),
+      poolSizes.data()};
+
   err = m_devFuncs->vkCreateDescriptorPool(dev, &descPoolInfo, nullptr,
                                            &m_descPool);
   if (err != VK_SUCCESS)
     qFatal("Failed to create descriptor pool: %d", err);
 
-  VkDescriptorSetLayoutBinding layoutBinding = {
-      0, // binding
-      VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT,
-      nullptr};
+  std::array<VkDescriptorSetLayoutBinding, 3> layoutBindings{};
+
+  // Uniform buffer binding
+  layoutBindings[0].binding = 0;
+  layoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  layoutBindings[0].descriptorCount = 1;
+  layoutBindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+  // Texture binding
+  layoutBindings[1].binding = 1;
+  layoutBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+  layoutBindings[1].descriptorCount = 1;
+  layoutBindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+  // Sampler binding
+  layoutBindings[2].binding = 2;
+  layoutBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+  layoutBindings[2].descriptorCount = 1;
+  layoutBindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
   VkDescriptorSetLayoutCreateInfo descLayoutInfo = {
-      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0, 1,
-      &layoutBinding};
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0,
+      static_cast<uint32_t>(layoutBindings.size()), layoutBindings.data()};
   err = m_devFuncs->vkCreateDescriptorSetLayout(dev, &descLayoutInfo, nullptr,
                                                 &m_descSetLayout);
   if (err != VK_SUCCESS)
@@ -285,15 +258,6 @@ void TriangleRenderer::initResources() {
                                                &m_descSet[i]);
     if (err != VK_SUCCESS)
       qFatal("Failed to allocate descriptor set: %d", err);
-
-    VkWriteDescriptorSet descWrite;
-    memset(&descWrite, 0, sizeof(descWrite));
-    descWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descWrite.dstSet = m_descSet[i];
-    descWrite.descriptorCount = 1;
-    descWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    descWrite.pBufferInfo = &m_uniformBufInfo[i];
-    m_devFuncs->vkUpdateDescriptorSets(dev, 1, &descWrite, 0, nullptr);
   }
 
   // Pipeline cache
@@ -409,6 +373,87 @@ void TriangleRenderer::initResources() {
     m_devFuncs->vkDestroyShaderModule(dev, vertShaderModule, nullptr);
   if (fragShaderModule)
     m_devFuncs->vkDestroyShaderModule(dev, fragShaderModule, nullptr);
+
+  VkDescriptorPoolSize poolSize{};
+  poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  poolSize.descriptorCount = 1; // Adjust if you have more images
+
+  VkDescriptorPoolCreateInfo poolInfo{};
+  poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  poolInfo.poolSizeCount = 1;
+  poolInfo.pPoolSizes = &poolSize;
+  poolInfo.maxSets = 1; // Adjust if you have more descriptor sets
+
+  if (m_devFuncs->vkCreateDescriptorPool(dev, &poolInfo, nullptr,
+                                         &m_computeDescPool) != VK_SUCCESS) {
+    qFatal("Failed to create descriptor pool for compute shader");
+  }
+
+  VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+  samplerLayoutBinding.binding = 0;
+  samplerLayoutBinding.descriptorCount = 1;
+  samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  samplerLayoutBinding.pImmutableSamplers = nullptr;
+  samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+  VkDescriptorSetLayoutCreateInfo layoutInfo{};
+  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfo.bindingCount = 1;
+  layoutInfo.pBindings = &samplerLayoutBinding;
+
+  if (m_devFuncs->vkCreateDescriptorSetLayout(
+          dev, &layoutInfo, nullptr, &m_computeDescSetLayout) != VK_SUCCESS) {
+    qFatal("Failed to create descriptor set layout for compute shader");
+  }
+
+  // allocate compute descriptor set
+  VkDescriptorSetAllocateInfo computeAllocInfo{};
+  computeAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  computeAllocInfo.descriptorPool = m_computeDescPool;
+  computeAllocInfo.descriptorSetCount = 1;
+  computeAllocInfo.pSetLayouts = &m_computeDescSetLayout;
+
+  if (m_devFuncs->vkAllocateDescriptorSets(dev, &computeAllocInfo,
+                                           &m_computeDescSet) != VK_SUCCESS) {
+    qFatal("Failed to allocate descriptor sets for compute shader");
+  }
+
+  VkPipelineLayoutCreateInfo computePipelineLayoutInfo{};
+  memset(&computePipelineLayoutInfo, 0, sizeof(computePipelineLayoutInfo));
+  computePipelineLayoutInfo.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  computePipelineLayoutInfo.setLayoutCount = 1;
+  computePipelineLayoutInfo.pSetLayouts = &m_computeDescSetLayout;
+
+  if (m_devFuncs->vkCreatePipelineLayout(dev, &computePipelineLayoutInfo,
+                                         nullptr, &m_computePipelineLayout) !=
+      VK_SUCCESS) {
+    qFatal("Failed to create compute pipeline layout");
+  }
+
+  VkShaderModule compShaderModule =
+      createShader(QStringLiteral("./main.comp"), shaderc_compute_shader);
+
+  VkPipelineShaderStageCreateInfo compShaderStageInfo{};
+  compShaderStageInfo.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  compShaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  compShaderStageInfo.module = compShaderModule;
+  compShaderStageInfo.pName = "main";
+
+  VkComputePipelineCreateInfo compPipelineCreateInfo{};
+  compPipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  compPipelineCreateInfo.stage = compShaderStageInfo;
+  compPipelineCreateInfo.layout = m_computePipelineLayout;
+
+  err = m_devFuncs->vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1,
+                                             &compPipelineCreateInfo, nullptr,
+                                             &m_computePipeline);
+  if (err != VK_SUCCESS)
+    qFatal("Failed to create compute pipeline: %d", err);
+
+  if (compShaderModule)
+    m_devFuncs->vkDestroyShaderModule(dev, compShaderModule, nullptr);
 }
 
 void TriangleRenderer::initSwapChainResources() {
@@ -420,16 +465,195 @@ void TriangleRenderer::initSwapChainResources() {
   const QSize sz = m_window->swapChainImageSize();
   m_proj.perspective(45.0f, sz.width() / (float)sz.height(), 0.01f, 100.0f);
   m_proj.translate(0, 0, -4);
+
+  VkDevice dev = m_window->device();
+  m_devFuncs = m_window->vulkanInstance()->deviceFunctions(dev);
+  m_devFuncs->vkDeviceWaitIdle(dev);
+
+  const int concurrentFrameCount = m_window->concurrentFrameCount();
+
+  VkResult err = VK_SUCCESS;
+
+  VkExtent3D textureExtent = {
+      static_cast<uint32_t>(sz.width()), static_cast<uint32_t>(sz.height()),
+      1 // depth
+  };
+
+  // print extent
+  qDebug("texture extent: %d x %d x %d", textureExtent.width,
+         textureExtent.height, textureExtent.depth);
+
+  VkImageCreateInfo imageInfo = {};
+  imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  imageInfo.imageType = VK_IMAGE_TYPE_2D;
+  imageInfo.extent = textureExtent;
+  imageInfo.mipLevels = 1;
+  imageInfo.arrayLayers = 1;
+  imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+  imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+  imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+  imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+  imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+  if (m_devFuncs->vkCreateImage(dev, &imageInfo, nullptr, &m_textureImage) !=
+      VK_SUCCESS) {
+    throw std::runtime_error("failed to create image!");
+  }
+
+  VkMemoryRequirements memRequirements;
+  m_devFuncs->vkGetImageMemoryRequirements(dev, m_textureImage,
+                                           &memRequirements);
+  VkPhysicalDeviceMemoryProperties memProperties;
+  m_window->vulkanInstance()->functions()->vkGetPhysicalDeviceMemoryProperties(
+      m_window->physicalDevice(), &memProperties);
+
+  VkMemoryAllocateInfo allocInfo = {};
+  allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocInfo.allocationSize = memRequirements.size;
+  allocInfo.memoryTypeIndex = UINT32_MAX;
+  for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+    if ((memRequirements.memoryTypeBits & (1 << i)) &&
+        (memProperties.memoryTypes[i].propertyFlags &
+         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ==
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+      allocInfo.memoryTypeIndex = i;
+      break;
+    }
+  }
+  if (allocInfo.memoryTypeIndex == UINT32_MAX) {
+    qFatal("failed to find suitable memory type");
+  }
+
+  if (m_devFuncs->vkAllocateMemory(dev, &allocInfo, nullptr,
+                                   &m_textureImageMemory) != VK_SUCCESS) {
+    qFatal("failed to allocate image memory");
+  }
+
+  m_devFuncs->vkBindImageMemory(dev, m_textureImage, m_textureImageMemory, 0);
+
+  VkImageViewCreateInfo viewInfo = {};
+  viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  viewInfo.image = m_textureImage;
+  viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+  viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  viewInfo.subresourceRange.baseMipLevel = 0;
+  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.baseArrayLayer = 0;
+  viewInfo.subresourceRange.layerCount = 1;
+
+  if (m_devFuncs->vkCreateImageView(dev, &viewInfo, nullptr,
+                                    &m_textureImageView) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create texture image view!");
+  }
+
+  for (int i = 0; i < concurrentFrameCount; ++i) {
+    std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
+
+    // Uniform buffer
+    descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[0].dstSet = m_descSet[i];
+    descriptorWrites[0].dstBinding = 0;
+    descriptorWrites[0].dstArrayElement = 0;
+    descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrites[0].descriptorCount = 1;
+    descriptorWrites[0].pBufferInfo = &m_uniformBufInfo[i];
+
+    // Texture image
+    VkDescriptorImageInfo textureImageInfo{};
+    textureImageInfo.imageView = m_textureImageView;
+    textureImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[1].dstSet = m_descSet[i];
+    descriptorWrites[1].dstBinding = 1;
+    descriptorWrites[1].dstArrayElement = 0;
+    descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    descriptorWrites[1].descriptorCount = 1;
+    descriptorWrites[1].pImageInfo = &textureImageInfo;
+
+    // Sampler
+    VkDescriptorImageInfo samplerInfo{};
+    samplerInfo.sampler = m_textureSampler;
+
+    descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[2].dstSet = m_descSet[i];
+    descriptorWrites[2].dstBinding = 2;
+    descriptorWrites[2].dstArrayElement = 0;
+    descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    descriptorWrites[2].descriptorCount = 1;
+    descriptorWrites[2].pImageInfo = &samplerInfo;
+
+    m_devFuncs->vkUpdateDescriptorSets(dev, descriptorWrites.size(),
+                                       descriptorWrites.data(), 0, nullptr);
+  }
+
+  {
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageView = m_textureImageView; // replace with your image view
+    imageInfo.imageLayout =
+        VK_IMAGE_LAYOUT_GENERAL; // Layout used in the compute shader
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = m_computeDescSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pImageInfo = &imageInfo;
+
+    m_devFuncs->vkUpdateDescriptorSets(dev, 1, &descriptorWrite, 0, nullptr);
+  }
 }
 
 void TriangleRenderer::releaseSwapChainResources() {
   qDebug("releaseSwapChainResources");
+
+  if (m_textureImageView != VK_NULL_HANDLE) {
+    m_devFuncs->vkDestroyImageView(m_window->device(), m_textureImageView,
+                                   nullptr);
+    m_textureImageView = VK_NULL_HANDLE;
+  }
+
+  if (m_textureImage != VK_NULL_HANDLE) {
+    m_devFuncs->vkDestroyImage(m_window->device(), m_textureImage, nullptr);
+    m_textureImage = VK_NULL_HANDLE;
+  }
+
+  if (m_textureImageMemory != VK_NULL_HANDLE) {
+    m_devFuncs->vkFreeMemory(m_window->device(), m_textureImageMemory, nullptr);
+    m_textureImageMemory = VK_NULL_HANDLE;
+  }
 }
 
 void TriangleRenderer::releaseResources() {
   qDebug("releaseResources");
 
   VkDevice dev = m_window->device();
+
+  if (m_computePipeline) {
+    m_devFuncs->vkDestroyPipeline(dev, m_computePipeline, nullptr);
+    m_computePipeline = VK_NULL_HANDLE;
+  }
+
+  if (m_computePipelineLayout) {
+    m_devFuncs->vkDestroyPipelineLayout(dev, m_computePipelineLayout, nullptr);
+    m_computePipelineLayout = VK_NULL_HANDLE;
+  }
+
+  if (m_computeDescSetLayout) {
+    m_devFuncs->vkDestroyDescriptorSetLayout(dev, m_computeDescSetLayout,
+                                             nullptr);
+    m_computeDescSetLayout = VK_NULL_HANDLE;
+  }
+
+  if (m_computeDescPool) {
+    m_devFuncs->vkDestroyDescriptorPool(dev, m_computeDescPool, nullptr);
+    m_computeDescPool = VK_NULL_HANDLE;
+  }
 
   if (m_pipeline) {
     m_devFuncs->vkDestroyPipeline(dev, m_pipeline, nullptr);
@@ -456,6 +680,11 @@ void TriangleRenderer::releaseResources() {
     m_descPool = VK_NULL_HANDLE;
   }
 
+  if (m_textureSampler != VK_NULL_HANDLE) {
+    m_devFuncs->vkDestroySampler(m_window->device(), m_textureSampler, nullptr);
+    m_textureSampler = VK_NULL_HANDLE;
+  }
+
   if (m_buf) {
     m_devFuncs->vkDestroyBuffer(dev, m_buf, nullptr);
     m_buf = VK_NULL_HANDLE;
@@ -469,8 +698,70 @@ void TriangleRenderer::releaseResources() {
 
 void TriangleRenderer::startNextFrame() {
   VkDevice dev = m_window->device();
+  m_devFuncs->vkDeviceWaitIdle(dev);
   VkCommandBuffer cb = m_window->currentCommandBuffer();
-  const QSize sz = m_window->swapChainImageSize();
+  QSize sz = m_window->swapChainImageSize();
+
+  // Image layout transition barrier
+  VkImageMemoryBarrier computeBarrier{};
+  computeBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  computeBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  computeBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+  computeBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  computeBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  computeBarrier.image = m_textureImage;
+  computeBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  computeBarrier.subresourceRange.baseMipLevel = 0;
+  computeBarrier.subresourceRange.levelCount = 1;
+  computeBarrier.subresourceRange.baseArrayLayer = 0;
+  computeBarrier.subresourceRange.layerCount = 1;
+  computeBarrier.srcAccessMask = 0;
+  computeBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+
+  m_devFuncs->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                   0,          // No dependency flags
+                                   0, nullptr, // No memory barriers
+                                   0, nullptr, // No buffer memory barriers
+                                   1, &computeBarrier // Image memory barrier
+  );
+
+  // Dispatch compute shader
+  m_devFuncs->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                m_computePipeline);
+
+  // Bind descriptor set
+  m_devFuncs->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                      m_computePipelineLayout, 0, 1,
+                                      &m_computeDescSet, 0, nullptr);
+
+  m_devFuncs->vkCmdDispatch(cb, (uint32_t)ceil(sz.width() / float(8)),
+                            (uint32_t)ceil(sz.height() / float(8)), 1);
+
+  // Image layout transition barrier
+  VkImageMemoryBarrier renderBarrier{};
+  renderBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  renderBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  renderBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  renderBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  renderBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  renderBarrier.image = m_textureImage;
+  renderBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  renderBarrier.subresourceRange.baseMipLevel = 0;
+  renderBarrier.subresourceRange.levelCount = 1;
+  renderBarrier.subresourceRange.baseArrayLayer = 0;
+  renderBarrier.subresourceRange.layerCount = 1;
+  renderBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  renderBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+  // Apply the barrier
+  m_devFuncs->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                   0,          // No dependency flags
+                                   0, nullptr, // No memory barriers
+                                   0, nullptr, // No buffer memory barriers
+                                   1, &renderBarrier // Image memory barrier
+  );
 
   VkClearColorValue clearColor = {{0, 0, 0, 1}};
   VkClearDepthStencilValue clearDS = {1, 0};
@@ -548,8 +839,10 @@ public:
 };
 
 void VulkanRenderer::reinitializeResources() {
+  releaseSwapChainResources();
   releaseResources();
   initResources();
+  initSwapChainResources();
 }
 
 class VulkanWindow : public QVulkanWindow {
@@ -560,6 +853,8 @@ public:
 
   VulkanRenderer *m_renderer;
 
+  void keyPressEvent(QKeyEvent *event) override;
+
 signals:
   void vulkanInfoReceived(const QString &text);
   void frameQueued(int colorValue);
@@ -567,6 +862,14 @@ signals:
 public slots:
   void onReinitializeResources();
 };
+
+void VulkanWindow::keyPressEvent(QKeyEvent *event) {
+  if (event->key() == Qt::Key_Escape) {
+    qApp->quit();
+  } else {
+    QVulkanWindow::keyPressEvent(event);
+  }
+}
 
 void VulkanWindow::onReinitializeResources() {
   m_renderer->reinitializeResources();
@@ -618,6 +921,10 @@ MainWindow::MainWindow(VulkanWindow *w, QPlainTextEdit *logWidget)
   connect(editFragShaderButton, &QPushButton::clicked, this,
           [this]() { editShaderFile(QStringLiteral("./main.frag")); });
 
+  QPushButton *editCompShaderButton = new QPushButton(tr("Edit main.comp"));
+  connect(editCompShaderButton, &QPushButton::clicked, this,
+          [this]() { editShaderFile(QStringLiteral("./main.comp")); });
+
   QPushButton *compileButton = new QPushButton(tr("&Compile"));
   compileButton->setFocusPolicy(Qt::NoFocus);
 
@@ -639,9 +946,12 @@ MainWindow::MainWindow(VulkanWindow *w, QPlainTextEdit *logWidget)
   layout->addWidget(grabButton, 1);
   layout->addWidget(editVertShaderButton, 1);
   layout->addWidget(editFragShaderButton, 1);
+  layout->addWidget(editCompShaderButton, 1);
   layout->addWidget(compileButton, 1);
   layout->addWidget(quitButton, 1);
   setLayout(layout);
+
+  wrapper->setFocus();
 }
 
 void MainWindow::editShaderFile(const QString &filePath) {
@@ -800,6 +1110,8 @@ int main(int argc, char *argv[]) {
   QLoggingCategory::setFilterRules(QStringLiteral("qt.vulkan=true"));
 
   QVulkanInstance inst;
+  inst.setApiVersion(QVersionNumber(1, 1));
+  inst.setExtensions({"VK_KHR_get_physical_device_properties2"});
   inst.setLayers({"VK_LAYER_KHRONOS_validation"});
 
   if (!inst.create())
