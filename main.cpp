@@ -1,4 +1,22 @@
 #include "main.hpp"
+#include <glm/ext/matrix_float4x4.hpp>
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/matrix.hpp>
+#include <glm/trigonometric.hpp>
+#include <qmargins.h>
+#include <qmatrix4x4.h>
+
+struct UBuf {
+  glm::mat4 mvp;
+  glm::mat4 iMvp;
+  glm::vec4 origin_0_0;
+  glm::vec4 origin_1_0;
+  glm::vec4 origin_0_1;
+  glm::vec4 direction_0_0;
+  glm::vec4 direction_1_0;
+  glm::vec4 direction_0_1;
+  glm::vec4 data_width_height_time;
+};
 
 class TriangleRenderer : public QVulkanWindowRenderer {
 public:
@@ -11,6 +29,9 @@ public:
 
   void startNextFrame() override;
 
+  double m_computeTimeTotal = 0.0;
+  uint32_t m_computeTimeCount = 0;
+
 protected:
   VkShaderModule createShader(const QString &name,
                               const shaderc_shader_kind kind);
@@ -18,10 +39,14 @@ protected:
   QVulkanWindow *m_window;
   QVulkanDeviceFunctions *m_devFuncs;
 
+  VkDeviceSize m_bufSize = 4096; // 4 kilobytes
+
+  VkDeviceMemory m_hostBufMem = VK_NULL_HANDLE;
+  VkBuffer m_hostBuf = VK_NULL_HANDLE;
+
   VkDeviceMemory m_bufMem = VK_NULL_HANDLE;
   VkBuffer m_buf = VK_NULL_HANDLE;
-  VkDescriptorBufferInfo
-      m_uniformBufInfo[QVulkanWindow::MAX_CONCURRENT_FRAME_COUNT];
+  VkDescriptorBufferInfo m_uniformBufInfo;
 
   VkImage m_textureImage = VK_NULL_HANDLE;
   VkDeviceMemory m_textureImageMemory = VK_NULL_HANDLE;
@@ -44,11 +69,9 @@ protected:
 
   QMatrix4x4 m_proj;
   float m_rotation = 0.0f;
-};
 
-static float vertexData[] = { // Y up, front = CCW
-    0.0f, 0.5f, 1.0f, 0.0f,  0.0f, -0.5f, -0.5f, 0.0f,
-    1.0f, 0.0f, 0.5f, -0.5f, 0.0f, 0.0f,  1.0f};
+  std::chrono::steady_clock::time_point m_startTime;
+};
 
 static const int UNIFORM_DATA_SIZE = 16 * sizeof(float);
 
@@ -57,6 +80,7 @@ static inline VkDeviceSize aligned(VkDeviceSize v, VkDeviceSize byteAlign) {
 }
 
 TriangleRenderer::TriangleRenderer(QVulkanWindow *w, bool msaa) : m_window(w) {
+  m_startTime = std::chrono::steady_clock::now();
   QVulkanInfoVector<QVulkanExtension> supportedExtensions =
       m_window->supportedDeviceExtensions();
   if (supportedExtensions.contains(
@@ -105,57 +129,104 @@ void TriangleRenderer::initResources() {
   VkDevice dev = m_window->device();
   m_devFuncs = m_window->vulkanInstance()->deviceFunctions(dev);
 
+  VkPhysicalDeviceMemoryProperties memProperties;
+  m_window->vulkanInstance()->functions()->vkGetPhysicalDeviceMemoryProperties(
+      m_window->physicalDevice(), &memProperties);
+
   const int concurrentFrameCount = m_window->concurrentFrameCount();
   const VkPhysicalDeviceLimits *pdevLimits =
       &m_window->physicalDeviceProperties()->limits;
   const VkDeviceSize uniAlign = pdevLimits->minUniformBufferOffsetAlignment;
   qDebug("uniform buffer offset alignment is %u", (uint)uniAlign);
-  VkBufferCreateInfo bufInfo;
-  memset(&bufInfo, 0, sizeof(bufInfo));
-  bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  // Our internal layout is vertex, uniform, uniform, ... with each uniform
-  // buffer start offset aligned to uniAlign.
-  const VkDeviceSize vertexAllocSize = aligned(sizeof(vertexData), uniAlign);
-  const VkDeviceSize uniformAllocSize = aligned(UNIFORM_DATA_SIZE, uniAlign);
-  bufInfo.size = vertexAllocSize + concurrentFrameCount * uniformAllocSize;
-  bufInfo.usage =
-      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+  const VkDeviceSize uniformAllocSize = aligned(m_bufSize, uniAlign);
+  VkResult err = VK_SUCCESS;
 
-  VkResult err = m_devFuncs->vkCreateBuffer(dev, &bufInfo, nullptr, &m_buf);
-  if (err != VK_SUCCESS)
-    qFatal("Failed to create buffer: %d", err);
-
-  VkMemoryRequirements memReq;
-  m_devFuncs->vkGetBufferMemoryRequirements(dev, m_buf, &memReq);
-
-  VkMemoryAllocateInfo memAllocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                                       nullptr, memReq.size,
-                                       m_window->hostVisibleMemoryIndex()};
-
-  err = m_devFuncs->vkAllocateMemory(dev, &memAllocInfo, nullptr, &m_bufMem);
-  if (err != VK_SUCCESS)
-    qFatal("Failed to allocate memory: %d", err);
-
-  err = m_devFuncs->vkBindBufferMemory(dev, m_buf, m_bufMem, 0);
-  if (err != VK_SUCCESS)
-    qFatal("Failed to bind buffer memory: %d", err);
-
-  quint8 *p;
-  err = m_devFuncs->vkMapMemory(dev, m_bufMem, 0, memReq.size, 0,
-                                reinterpret_cast<void **>(&p));
-  if (err != VK_SUCCESS)
-    qFatal("Failed to map memory: %d", err);
-  memcpy(p, vertexData, sizeof(vertexData));
-  QMatrix4x4 ident;
-  memset(m_uniformBufInfo, 0, sizeof(m_uniformBufInfo));
-  for (int i = 0; i < concurrentFrameCount; ++i) {
-    const VkDeviceSize offset = vertexAllocSize + i * uniformAllocSize;
-    memcpy(p + offset, ident.constData(), 16 * sizeof(float));
-    m_uniformBufInfo[i].buffer = m_buf;
-    m_uniformBufInfo[i].offset = offset;
-    m_uniformBufInfo[i].range = uniformAllocSize;
+  {
+    VkBufferCreateInfo bufInfo;
+    memset(&bufInfo, 0, sizeof(bufInfo));
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size = uniformAllocSize;
+    bufInfo.usage =
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    err = m_devFuncs->vkCreateBuffer(dev, &bufInfo, nullptr, &m_hostBuf);
+    if (err != VK_SUCCESS)
+      qFatal("Failed to create buffer: %d", err);
+    VkMemoryRequirements memReq;
+    m_devFuncs->vkGetBufferMemoryRequirements(dev, m_hostBuf, &memReq);
+    VkMemoryAllocateInfo memAllocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                         nullptr, memReq.size, UINT32_MAX};
+    memAllocInfo.memoryTypeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+      if ((memReq.memoryTypeBits & (1 << i)) &&
+          (memProperties.memoryTypes[i].propertyFlags &
+           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ==
+              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+        memAllocInfo.memoryTypeIndex = i;
+        break;
+      }
+    }
+    if (memAllocInfo.memoryTypeIndex == UINT32_MAX) {
+      qFatal("failed to find suitable memory type");
+    }
+    err = m_devFuncs->vkAllocateMemory(dev, &memAllocInfo, nullptr,
+                                       &m_hostBufMem);
+    if (err != VK_SUCCESS)
+      qFatal("Failed to allocate memory: %d", err);
+    err = m_devFuncs->vkBindBufferMemory(dev, m_hostBuf, m_hostBufMem, 0);
+    if (err != VK_SUCCESS)
+      qFatal("Failed to bind buffer memory: %d", err);
+    void *data;
+    err = m_devFuncs->vkMapMemory(dev, m_hostBufMem, 0, uniformAllocSize, 0,
+                                  &data);
+    if (err != VK_SUCCESS)
+      qFatal("Failed to map memory: %d", err);
+    VkMappedMemoryRange range = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr,
+                                 m_hostBufMem, 0, uniformAllocSize};
+    m_devFuncs->vkInvalidateMappedMemoryRanges(dev, 1, &range);
+    memset(data, 0, uniformAllocSize);
+    m_devFuncs->vkFlushMappedMemoryRanges(dev, 1, &range);
+    m_devFuncs->vkUnmapMemory(dev, m_hostBufMem);
   }
-  m_devFuncs->vkUnmapMemory(dev, m_bufMem);
+
+  {
+    VkBufferCreateInfo bufInfo;
+    memset(&bufInfo, 0, sizeof(bufInfo));
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size = uniformAllocSize;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    err = m_devFuncs->vkCreateBuffer(dev, &bufInfo, nullptr, &m_buf);
+    if (err != VK_SUCCESS)
+      qFatal("Failed to create buffer: %d", err);
+    VkMemoryRequirements memReq;
+    m_devFuncs->vkGetBufferMemoryRequirements(dev, m_buf, &memReq);
+    VkMemoryAllocateInfo memAllocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                         nullptr, memReq.size, UINT32_MAX};
+    memAllocInfo.memoryTypeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+      if ((memReq.memoryTypeBits & (1 << i)) &&
+          (memProperties.memoryTypes[i].propertyFlags &
+           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ==
+              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+        memAllocInfo.memoryTypeIndex = i;
+        break;
+      }
+    }
+    if (memAllocInfo.memoryTypeIndex == UINT32_MAX) {
+      qFatal("failed to find suitable memory type");
+    }
+    err = m_devFuncs->vkAllocateMemory(dev, &memAllocInfo, nullptr, &m_bufMem);
+    if (err != VK_SUCCESS)
+      qFatal("Failed to allocate memory: %d", err);
+    err = m_devFuncs->vkBindBufferMemory(dev, m_buf, m_bufMem, 0);
+    if (err != VK_SUCCESS)
+      qFatal("Failed to bind buffer memory: %d", err);
+  }
+
+  m_uniformBufInfo.buffer = m_buf;
+  m_uniformBufInfo.offset = 0;
+  m_uniformBufInfo.range = uniformAllocSize;
 
   VkSamplerCreateInfo samplerInfo = {};
   samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -177,26 +248,15 @@ void TriangleRenderer::initResources() {
     qFatal("failed to create texture sampler");
   }
 
-  VkVertexInputBindingDescription vertexBindingDesc = {
-      0, // binding
-      5 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
-  VkVertexInputAttributeDescription vertexAttrDesc[] = {
-      {   // position
-       0, // location
-       0, // binding
-       VK_FORMAT_R32G32_SFLOAT, 0},
-      {// color
-       1, 0, VK_FORMAT_R32G32B32_SFLOAT, 2 * sizeof(float)}};
-
   VkPipelineVertexInputStateCreateInfo vertexInputInfo;
   vertexInputInfo.sType =
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   vertexInputInfo.pNext = nullptr;
   vertexInputInfo.flags = 0;
-  vertexInputInfo.vertexBindingDescriptionCount = 1;
-  vertexInputInfo.pVertexBindingDescriptions = &vertexBindingDesc;
-  vertexInputInfo.vertexAttributeDescriptionCount = 2;
-  vertexInputInfo.pVertexAttributeDescriptions = vertexAttrDesc;
+  vertexInputInfo.vertexBindingDescriptionCount = 0;
+  vertexInputInfo.pVertexBindingDescriptions = nullptr;
+  vertexInputInfo.vertexAttributeDescriptionCount = 0;
+  vertexInputInfo.pVertexAttributeDescriptions = nullptr;
 
   // Set up descriptor set and its layout.
   std::array<VkDescriptorPoolSize, 3> poolSizes{};
@@ -228,7 +288,8 @@ void TriangleRenderer::initResources() {
   layoutBindings[0].binding = 0;
   layoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   layoutBindings[0].descriptorCount = 1;
-  layoutBindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+  layoutBindings[0].stageFlags =
+      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
   // Texture binding
   layoutBindings[1].binding = 1;
@@ -378,28 +439,48 @@ void TriangleRenderer::initResources() {
   poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
   poolSize.descriptorCount = 1; // Adjust if you have more images
 
-  VkDescriptorPoolCreateInfo poolInfo{};
-  poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-  poolInfo.poolSizeCount = 1;
-  poolInfo.pPoolSizes = &poolSize;
-  poolInfo.maxSets = 1; // Adjust if you have more descriptor sets
+  std::array<VkDescriptorPoolSize, 4> computePoolSizes{};
+  computePoolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  computePoolSizes[0].descriptorCount = concurrentFrameCount;
 
-  if (m_devFuncs->vkCreateDescriptorPool(dev, &poolInfo, nullptr,
+  computePoolSizes[1].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+  computePoolSizes[1].descriptorCount = concurrentFrameCount;
+
+  computePoolSizes[2].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+  computePoolSizes[2].descriptorCount = concurrentFrameCount;
+
+  computePoolSizes[3].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  computePoolSizes[3].descriptorCount = concurrentFrameCount;
+
+  VkDescriptorPoolCreateInfo computeDescPoolInfo = {
+      VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+      nullptr,
+      0,
+      static_cast<uint32_t>(concurrentFrameCount),
+      static_cast<uint32_t>(computePoolSizes.size()),
+      computePoolSizes.data()};
+
+  if (m_devFuncs->vkCreateDescriptorPool(dev, &computeDescPoolInfo, nullptr,
                                          &m_computeDescPool) != VK_SUCCESS) {
     qFatal("Failed to create descriptor pool for compute shader");
   }
 
-  VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-  samplerLayoutBinding.binding = 0;
-  samplerLayoutBinding.descriptorCount = 1;
-  samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-  samplerLayoutBinding.pImmutableSamplers = nullptr;
-  samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  std::array<VkDescriptorSetLayoutBinding, 2> samplerLayoutBindings{};
+  samplerLayoutBindings[0].binding = 0;
+  samplerLayoutBindings[0].descriptorCount = 1;
+  samplerLayoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  samplerLayoutBindings[0].pImmutableSamplers = nullptr;
+  samplerLayoutBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  samplerLayoutBindings[1].binding = 1;
+  samplerLayoutBindings[1].descriptorCount = 1;
+  samplerLayoutBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  samplerLayoutBindings[1].pImmutableSamplers = nullptr;
+  samplerLayoutBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
   VkDescriptorSetLayoutCreateInfo layoutInfo{};
   layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 1;
-  layoutInfo.pBindings = &samplerLayoutBinding;
+  layoutInfo.bindingCount = samplerLayoutBindings.size();
+  layoutInfo.pBindings = samplerLayoutBindings.data();
 
   if (m_devFuncs->vkCreateDescriptorSetLayout(
           dev, &layoutInfo, nullptr, &m_computeDescSetLayout) != VK_SUCCESS) {
@@ -459,12 +540,11 @@ void TriangleRenderer::initResources() {
 void TriangleRenderer::initSwapChainResources() {
   qDebug("initSwapChainResources");
 
-  // Projection matrix
-  m_proj = m_window->clipCorrectionMatrix(); // adjust for Vulkan-OpenGL clip
-                                             // space differences
+  VkPhysicalDeviceMemoryProperties memProperties;
+  m_window->vulkanInstance()->functions()->vkGetPhysicalDeviceMemoryProperties(
+      m_window->physicalDevice(), &memProperties);
+
   const QSize sz = m_window->swapChainImageSize();
-  m_proj.perspective(45.0f, sz.width() / (float)sz.height(), 0.01f, 100.0f);
-  m_proj.translate(0, 0, -4);
 
   VkDevice dev = m_window->device();
   m_devFuncs = m_window->vulkanInstance()->deviceFunctions(dev);
@@ -505,9 +585,6 @@ void TriangleRenderer::initSwapChainResources() {
   VkMemoryRequirements memRequirements;
   m_devFuncs->vkGetImageMemoryRequirements(dev, m_textureImage,
                                            &memRequirements);
-  VkPhysicalDeviceMemoryProperties memProperties;
-  m_window->vulkanInstance()->functions()->vkGetPhysicalDeviceMemoryProperties(
-      m_window->physicalDevice(), &memProperties);
 
   VkMemoryAllocateInfo allocInfo = {};
   allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -559,7 +636,7 @@ void TriangleRenderer::initSwapChainResources() {
     descriptorWrites[0].dstArrayElement = 0;
     descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     descriptorWrites[0].descriptorCount = 1;
-    descriptorWrites[0].pBufferInfo = &m_uniformBufInfo[i];
+    descriptorWrites[0].pBufferInfo = &m_uniformBufInfo;
 
     // Texture image
     VkDescriptorImageInfo textureImageInfo{};
@@ -591,21 +668,31 @@ void TriangleRenderer::initSwapChainResources() {
   }
 
   {
+    std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+
+    descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[0].dstSet = m_computeDescSet;
+    descriptorWrites[0].dstBinding = 0;
+    descriptorWrites[0].dstArrayElement = 0;
+    descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrites[0].descriptorCount = 1;
+    descriptorWrites[0].pBufferInfo = &m_uniformBufInfo;
+
     VkDescriptorImageInfo imageInfo{};
     imageInfo.imageView = m_textureImageView; // replace with your image view
     imageInfo.imageLayout =
         VK_IMAGE_LAYOUT_GENERAL; // Layout used in the compute shader
 
-    VkWriteDescriptorSet descriptorWrite{};
-    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet = m_computeDescSet;
-    descriptorWrite.dstBinding = 0;
-    descriptorWrite.dstArrayElement = 0;
-    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    descriptorWrite.descriptorCount = 1;
-    descriptorWrite.pImageInfo = &imageInfo;
+    descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[1].dstSet = m_computeDescSet;
+    descriptorWrites[1].dstBinding = 1;
+    descriptorWrites[1].dstArrayElement = 0;
+    descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    descriptorWrites[1].descriptorCount = 1;
+    descriptorWrites[1].pImageInfo = &imageInfo;
 
-    m_devFuncs->vkUpdateDescriptorSets(dev, 1, &descriptorWrite, 0, nullptr);
+    m_devFuncs->vkUpdateDescriptorSets(dev, descriptorWrites.size(),
+                                       descriptorWrites.data(), 0, nullptr);
   }
 }
 
@@ -694,6 +781,26 @@ void TriangleRenderer::releaseResources() {
     m_devFuncs->vkFreeMemory(dev, m_bufMem, nullptr);
     m_bufMem = VK_NULL_HANDLE;
   }
+
+  if (m_hostBuf) {
+    m_devFuncs->vkDestroyBuffer(dev, m_hostBuf, nullptr);
+    m_hostBuf = VK_NULL_HANDLE;
+  }
+
+  if (m_hostBufMem) {
+    m_devFuncs->vkFreeMemory(dev, m_hostBufMem, nullptr);
+    m_hostBufMem = VK_NULL_HANDLE;
+  }
+}
+
+glm::vec3 NDCToWorldSpace(const glm::vec3 &ndc,
+                          const glm::mat4 &inverseProjectionMatrix,
+                          const glm::mat4 &inverseViewMatrix) {
+  glm::vec4 clipSpacePos = glm::vec4(ndc, 1.0f);
+  glm::vec4 eyeSpacePos = inverseProjectionMatrix * clipSpacePos;
+  eyeSpacePos /= eyeSpacePos.w;
+  glm::vec4 worldSpacePos = inverseViewMatrix * eyeSpacePos;
+  return glm::vec3(worldSpacePos);
 }
 
 void TriangleRenderer::startNextFrame() {
@@ -702,11 +809,135 @@ void TriangleRenderer::startNextFrame() {
   VkCommandBuffer cb = m_window->currentCommandBuffer();
   QSize sz = m_window->swapChainImageSize();
 
+  uint8_t *data;
+  VkResult err = m_devFuncs->vkMapMemory(
+      dev, m_hostBufMem, m_uniformBufInfo.offset, m_uniformBufInfo.range, 0,
+      reinterpret_cast<void **>(&data));
+  if (err != VK_SUCCESS)
+    qFatal("Failed to map memory: %d", err);
+  VkMappedMemoryRange range = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr,
+                               m_hostBufMem, 0, m_uniformBufInfo.range};
+  m_devFuncs->vkInvalidateMappedMemoryRanges(dev, 1, &range);
+  float fov = glm::radians(90.0f);
+  float aspectRatio =
+      static_cast<float>(sz.width()) / static_cast<float>(sz.height());
+  float nearPlane = 0.1f;
+  float farPlane = 100.0f;
+  glm::mat4 projectionMatrix =
+      glm::scale(glm::perspective(fov, aspectRatio, nearPlane, farPlane),
+                 glm::vec3(1.0f, -1.0f, 1.0f));
+  glm::mat4 viewMatrix =
+      glm::lookAt(glm::vec3(0.0f, 0.0f, -4.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+                  glm::vec3(0.0f, 1.0f, 0.0f));
+  glm::mat4 modelMatrix =
+      glm::rotate(glm::scale(glm::mat4(1.0), glm::vec3(1.6)),
+                  glm::radians(m_rotation), glm::vec3(0.0f, 1.0f, 0.0f));
+  QMatrix4x4 p;
+  p.setToIdentity();
+  memcpy(p.data(), &projectionMatrix, sizeof(glm::mat4));
+  QMatrix4x4 v;
+  v.setToIdentity();
+  memcpy(v.data(), &viewMatrix, sizeof(glm::mat4));
+  QMatrix4x4 m;
+  m.setToIdentity();
+  memcpy(m.data(), &modelMatrix, sizeof(glm::mat4));
+  QMatrix4x4 mv = v * m;
+  QMatrix4x4 mvp = p * mv;
+  UBuf ubuf{
+      .mvp = projectionMatrix * viewMatrix * modelMatrix,
+  };
+  glm::mat4 inverseProjectionMatrix = glm::inverse(projectionMatrix);
+  glm::mat4 viewModelMatrix = viewMatrix * modelMatrix;
+  glm::mat4 inverseViewModelMatrix = glm::inverse(viewModelMatrix);
+  ubuf.iMvp = glm::inverse(ubuf.mvp);
+  {
+    ubuf.origin_0_0 =
+        glm::vec4(NDCToWorldSpace(glm::vec3(-1, -1, 0), inverseProjectionMatrix,
+                                  inverseViewModelMatrix),
+                  0.0);
+    ubuf.direction_0_0 =
+        glm::vec4(NDCToWorldSpace(glm::vec3(-1, -1, 1), inverseProjectionMatrix,
+                                  inverseViewModelMatrix),
+                  0.0) -
+        ubuf.origin_0_0;
+  }
+  {
+    ubuf.origin_1_0 =
+        glm::vec4(NDCToWorldSpace(glm::vec3(1, -1, 0), inverseProjectionMatrix,
+                                  inverseViewModelMatrix),
+                  0.0);
+    ubuf.direction_1_0 =
+        glm::vec4(NDCToWorldSpace(glm::vec3(1, -1, 1), inverseProjectionMatrix,
+                                  inverseViewModelMatrix),
+                  0.0) -
+        ubuf.origin_1_0;
+  }
+  {
+    ubuf.origin_0_1 =
+        glm::vec4(NDCToWorldSpace(glm::vec3(-1, 1, 0), inverseProjectionMatrix,
+                                  inverseViewModelMatrix),
+                  0.0);
+    ubuf.direction_0_1 =
+        glm::vec4(NDCToWorldSpace(glm::vec3(-1, 1, 1), inverseProjectionMatrix,
+                                  inverseViewModelMatrix),
+                  0.0) -
+        ubuf.origin_0_1;
+  }
+  ubuf.origin_1_0 =
+      (ubuf.origin_1_0 - ubuf.origin_0_0) / static_cast<float>(sz.width());
+  ubuf.origin_0_1 =
+      (ubuf.origin_0_1 - ubuf.origin_0_0) / static_cast<float>(sz.height());
+  ubuf.direction_1_0 = (ubuf.direction_1_0 - ubuf.direction_0_0) /
+                       static_cast<float>(sz.width());
+  ubuf.direction_0_1 = (ubuf.direction_0_1 - ubuf.direction_0_0) /
+                       static_cast<float>(sz.height());
+  ubuf.data_width_height_time.x = static_cast<float>(sz.width());
+  ubuf.data_width_height_time.y = static_cast<float>(sz.height());
+  ubuf.data_width_height_time.z =
+      static_cast<float>(std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - m_startTime)
+                             .count() /
+                         1000.0);
+  size_t offset = 0;
+  memcpy(data, &ubuf, sizeof(UBuf));
+  m_devFuncs->vkFlushMappedMemoryRanges(dev, 1, &range);
+  m_devFuncs->vkUnmapMemory(dev, m_hostBufMem);
+  m_rotation += 1.0f;
+
   VkCommandBufferAllocateInfo allocInfo{};
   allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   allocInfo.commandPool = m_window->graphicsCommandPool();
   allocInfo.commandBufferCount = 1;
+
+  VkCommandBuffer transferCommandBuffer;
+  m_devFuncs->vkAllocateCommandBuffers(dev, &allocInfo, &transferCommandBuffer);
+
+  VkCommandBufferBeginInfo transferBeginInfo{};
+  transferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  transferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  m_devFuncs->vkBeginCommandBuffer(transferCommandBuffer, &transferBeginInfo);
+
+  VkBufferCopy copyRegion = {
+      .srcOffset = 0, .dstOffset = 0, .size = m_uniformBufInfo.range};
+  m_devFuncs->vkCmdCopyBuffer(transferCommandBuffer, m_hostBuf, m_buf, 1,
+                              &copyRegion);
+
+  m_devFuncs->vkEndCommandBuffer(transferCommandBuffer);
+
+  VkSubmitInfo transferSubmitInfo{};
+  transferSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  transferSubmitInfo.commandBufferCount = 1;
+  transferSubmitInfo.pCommandBuffers = &transferCommandBuffer;
+
+  VkQueue transferQueue;
+  m_devFuncs->vkGetDeviceQueue(dev, 0, 0, &transferQueue);
+  m_devFuncs->vkQueueSubmit(transferQueue, 1, &transferSubmitInfo,
+                            VK_NULL_HANDLE);
+  m_devFuncs->vkQueueWaitIdle(transferQueue);
+  m_devFuncs->vkDeviceWaitIdle(dev);
+
+  auto computeStartTime = std::chrono::steady_clock::now();
 
   VkCommandBuffer computeCommandBuffer;
   m_devFuncs->vkAllocateCommandBuffers(dev, &allocInfo, &computeCommandBuffer);
@@ -766,8 +997,15 @@ void TriangleRenderer::startNextFrame() {
   m_devFuncs->vkQueueSubmit(computeQueue, 1, &computeSubmitInfo,
                             VK_NULL_HANDLE);
   m_devFuncs->vkQueueWaitIdle(computeQueue);
-
   m_devFuncs->vkDeviceWaitIdle(dev);
+
+  auto computeEndTime = std::chrono::steady_clock::now();
+  auto computeElapsedTime = std::chrono::duration<double, std::milli>(
+      computeEndTime - computeStartTime);
+  m_computeTimeTotal += computeElapsedTime.count();
+  m_computeTimeCount += 1;
+  double averageComputeTime =
+      m_computeTimeTotal / static_cast<double>(m_computeTimeCount);
 
   // Image layout transition barrier
   VkImageMemoryBarrier renderBarrier{};
@@ -815,27 +1053,11 @@ void TriangleRenderer::startNextFrame() {
   m_devFuncs->vkCmdBeginRenderPass(cmdBuf, &rpBeginInfo,
                                    VK_SUBPASS_CONTENTS_INLINE);
 
-  quint8 *p;
-  VkResult err = m_devFuncs->vkMapMemory(
-      dev, m_bufMem, m_uniformBufInfo[m_window->currentFrame()].offset,
-      UNIFORM_DATA_SIZE, 0, reinterpret_cast<void **>(&p));
-  if (err != VK_SUCCESS)
-    qFatal("Failed to map memory: %d", err);
-  QMatrix4x4 m = m_proj;
-  m.rotate(m_rotation, 0, 1, 0);
-  memcpy(p, m.constData(), 16 * sizeof(float));
-  m_devFuncs->vkUnmapMemory(dev, m_bufMem);
-
-  // Not exactly a real animation system, just advance on every frame for now.
-  m_rotation += 1.0f;
-
   m_devFuncs->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_pipeline);
   m_devFuncs->vkCmdBindDescriptorSets(
       cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1,
       &m_descSet[m_window->currentFrame()], 0, nullptr);
-  VkDeviceSize vbOffset = 0;
-  m_devFuncs->vkCmdBindVertexBuffers(cb, 0, 1, &m_buf, &vbOffset);
 
   VkViewport viewport;
   viewport.x = viewport.y = 0;
@@ -856,7 +1078,9 @@ void TriangleRenderer::startNextFrame() {
   m_devFuncs->vkCmdEndRenderPass(cmdBuf);
 
   m_window->frameReady();
+
   m_devFuncs->vkDeviceWaitIdle(dev);
+
   m_window->requestUpdate(); // render continuously, throttled by the
                              // presentation rate
 }
@@ -893,6 +1117,7 @@ public:
 signals:
   void vulkanInfoReceived(const QString &text);
   void frameQueued(int colorValue);
+  void updateComputeTime(double averageComputeTime);
 
 public slots:
   void onReinitializeResources();
@@ -922,12 +1147,14 @@ public slots:
   void onVulkanInfoReceived(const QString &text);
   void onFrameQueued(int colorValue);
   void onGrabRequested();
+  void onUpdateComputeTime(double averageComputeTime);
 
 private:
   VulkanWindow *m_window;
   QTabWidget *m_infoTab;
   QPlainTextEdit *m_info;
   QLCDNumber *m_number;
+  QLabel *m_computeTimeLabel;
   QTextEdit *m_shaderEditor;
   QString m_currentShaderPath;
 };
@@ -941,6 +1168,11 @@ MainWindow::MainWindow(VulkanWindow *w, QPlainTextEdit *logWidget)
 
   m_number = new QLCDNumber(3);
   m_number->setSegmentStyle(QLCDNumber::Filled);
+
+  m_computeTimeLabel = new QLabel(tr("Average Compute Time: "));
+
+  connect(w, &VulkanWindow::updateComputeTime, this,
+          &MainWindow::onUpdateComputeTime);
 
   QPushButton *grabButton = new QPushButton(tr("&Grab"));
   grabButton->setFocusPolicy(Qt::NoFocus);
@@ -977,6 +1209,7 @@ MainWindow::MainWindow(VulkanWindow *w, QPlainTextEdit *logWidget)
   m_infoTab->addTab(logWidget, tr("Debug Log"));
   layout->addWidget(m_infoTab, 2);
   layout->addWidget(m_number, 1);
+  layout->addWidget(m_computeTimeLabel, 1);
   layout->addWidget(wrapper, 5);
   layout->addWidget(grabButton, 1);
   layout->addWidget(editVertShaderButton, 1);
@@ -987,6 +1220,11 @@ MainWindow::MainWindow(VulkanWindow *w, QPlainTextEdit *logWidget)
   setLayout(layout);
 
   wrapper->setFocus();
+}
+
+void MainWindow::onUpdateComputeTime(double averageComputeTime) {
+  QString text = QString("Average Compute Time: %1 ms").arg(averageComputeTime);
+  m_computeTimeLabel->setText(text);
 }
 
 void MainWindow::editShaderFile(const QString &filePath) {
@@ -1117,6 +1355,8 @@ void VulkanRenderer::startNextFrame() {
   TriangleRenderer::startNextFrame();
   emit static_cast<VulkanWindow *>(m_window)->frameQueued(int(m_rotation) %
                                                           360);
+  emit static_cast<VulkanWindow *>(m_window)->updateComputeTime(
+      m_computeTimeTotal / static_cast<double>(m_computeTimeCount));
 }
 
 Q_LOGGING_CATEGORY(lcVk, "qt.vulkan")

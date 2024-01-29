@@ -1,5 +1,10 @@
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iostream>
+#include <ratio>
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -8,6 +13,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QLCDNumber>
+#include <QLabel>
 #include <QLibraryInfo>
 #include <QLoggingCategory>
 #include <QMessageBox>
@@ -23,14 +29,25 @@
 #include <QWidget>
 
 #include <qcontainerfwd.h>
+#include <qdatetime.h>
 #include <qlogging.h>
+#include <qmatrix4x4.h>
 #include <qsurfaceformat.h>
 #include <qtmetamacros.h>
+#include <qvectornd.h>
 #include <qversionnumber.h>
 
 #include <shaderc/shaderc.hpp>
 #include <spirv_cross/spirv_glsl.hpp>
 #include <vulkan/vulkan_core.h>
+
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/ext/scalar_constants.hpp>
+#include <glm/ext/vector_float4.hpp>
+#include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 std::vector<uint32_t> compile_file(const std::string &source_name,
                                    shaderc_shader_kind kind) {

@@ -14,6 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(DCMTK CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
 find_package(Qt6 CONFIG REQUIRED)
 find_package(Qt6Gui CONFIG REQUIRED)
 find_package(Qt6Network CONFIG REQUIRED)
@@ -46,7 +47,7 @@ set_target_properties(MainCxx PROPERTIES
 #     MACOSX_BUNDLE TRUE
 )
 target_link_libraries(MainCxx PRIVATE
-    DCMTK::DCMTK
+    DCMTK::DCMTK glm::glm
     Qt::Core Qt::Gui Qt::Network Qt::Widgets
     unofficial::shaderc::shaderc
     spirv-cross-core spirv-cross-glsl spirv-cross-msl
