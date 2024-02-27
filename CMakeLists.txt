@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.27)
 if(APPLE
     AND "${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin"
     AND "${CMAKE_HOST_SYSTEM_NAME}" STREQUAL "Darwin")
@@ -13,15 +13,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+find_package(7zip CONFIG REQUIRED)
+find_package(Boost COMPONENTS interprocess REQUIRED)
 find_package(DCMTK CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
-find_package(Qt6 CONFIG REQUIRED)
-find_package(Qt6Gui CONFIG REQUIRED)
-find_package(Qt6Network CONFIG REQUIRED)
-find_package(Qt6OpenGL CONFIG REQUIRED)
-find_package(Qt6OpenGLWidgets CONFIG REQUIRED)
-find_package(Qt6Sql CONFIG REQUIRED)
-find_package(Qt6Widgets CONFIG REQUIRED)
+find_package(Qt6 CONFIG REQUIRED COMPONENTS
+    Core Gui Network Widgets WebChannel WebSockets WebView
+)
+find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(unofficial-shaderc CONFIG REQUIRED)
 find_package(spirv_cross_core CONFIG REQUIRED)
 find_package(spirv_cross_glsl CONFIG REQUIRED)
@@ -32,28 +30,42 @@ find_package(spirv_cross_util CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(Taskflow CONFIG REQUIRED)
 find_package(TIFF REQUIRED)
+find_package(tinyfiledialogs CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nanobind)
+
+# set(CMAKE_CXX_CLANG_TIDY clang-tidy)
+
+nanobind_add_module(LibCxx lib.cpp)
+target_link_libraries(LibCxx PRIVATE
+    Boost::boost ${Boost_LIBRARIES}
+)
 
 qt_standard_project_setup()
 set(CMAKE_AUTOMOC ON)
-
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-
-# set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 
 qt_add_executable(MainCxx main.cpp)
 set_target_properties(MainCxx PROPERTIES
     WIN32_EXECUTABLE TRUE
 #     MACOSX_BUNDLE TRUE
 )
+target_include_directories(MainCxx PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/glm
+    ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(MainCxx PRIVATE LibCxx)
 target_link_libraries(MainCxx PRIVATE
-    DCMTK::DCMTK glm::glm
-    Qt::Core Qt::Gui Qt::Network Qt::Widgets
+    7zip::7zip Boost::interprocess ${Boost_LIBRARIES}
+    DCMTK::DCMTK
+    Qt::Core Qt::Gui Qt::Network Qt::Widgets Qt::WebChannel Qt::WebSockets Qt::WebView
     unofficial::shaderc::shaderc
     spirv-cross-core spirv-cross-glsl spirv-cross-msl
     spirv-cross-reflect spirv-cross-util
     Taskflow::Taskflow TIFF::TIFF
     Vulkan::Vulkan
+    tinyfiledialogs::tinyfiledialogs
 )
 
 install(TARGETS MainCxx

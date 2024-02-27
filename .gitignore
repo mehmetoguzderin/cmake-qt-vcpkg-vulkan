@@ -18,7 +18,10 @@
 
 /CMakeLists.txt.user*
 
-/.vscode/
+/.vscode/*
+!/.vscode/settings.json
+
+
 /.cache/
 
 /.vs/

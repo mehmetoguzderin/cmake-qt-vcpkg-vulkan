@@ -2,3 +2,23 @@
 	path = vcpkg
 	url = https://github.com/microsoft/vcpkg
     shallow = true
+
+[submodule "astc-encoder"]
+	path = astc-encoder
+	url = https://github.com/ARM-software/astc-encoder
+    shallow = true
+
+[submodule "bc7enc_rdo"]
+	path = bc7enc_rdo
+	url = https://github.com/richgel999/bc7enc_rdo
+    shallow = true
+
+[submodule "glm"]
+	path = glm
+	url = https://github.com/g-truc/glm
+    shallow = true
+
+[submodule "nanobind"]
+	path = nanobind
+	url = https://github.com/wjakob/nanobind
+    shallow = true
