@@ -14,7 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(7zip CONFIG REQUIRED)
-find_package(Boost COMPONENTS interprocess REQUIRED)
+find_package(Boost REQUIRED)
 find_package(DCMTK CONFIG REQUIRED)
 find_package(Qt6 CONFIG REQUIRED COMPONENTS
     Core Gui Network Widgets WebChannel WebSockets WebView
@@ -37,10 +37,13 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nanobind)
 
 # set(CMAKE_CXX_CLANG_TIDY clang-tidy)
 
-nanobind_add_module(LibCxx lib.cpp)
+add_library(LibCxx SHARED lib.cpp)
 target_link_libraries(LibCxx PRIVATE
     Boost::boost ${Boost_LIBRARIES}
 )
+
+nanobind_add_module(PythonCxx python.cpp)
+target_link_libraries(PythonCxx PRIVATE LibCxx)
 
 qt_standard_project_setup()
 set(CMAKE_AUTOMOC ON)
@@ -57,7 +60,7 @@ target_include_directories(MainCxx PRIVATE
 )
 target_link_libraries(MainCxx PRIVATE LibCxx)
 target_link_libraries(MainCxx PRIVATE
-    7zip::7zip Boost::interprocess ${Boost_LIBRARIES}
+    7zip::7zip ${Boost_LIBRARIES}
     DCMTK::DCMTK
     Qt::Core Qt::Gui Qt::Network Qt::Widgets Qt::WebChannel Qt::WebSockets Qt::WebView
     unofficial::shaderc::shaderc
