@@ -20,6 +20,7 @@ find_package(Qt6 CONFIG REQUIRED COMPONENTS
     Core Gui Network Widgets WebChannel WebSockets WebView
 )
 find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
+# TODO: find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(unofficial-shaderc CONFIG REQUIRED)
 find_package(spirv_cross_core CONFIG REQUIRED)
 find_package(spirv_cross_glsl CONFIG REQUIRED)
