@@ -43,7 +43,7 @@ target_link_libraries(LibCxx PRIVATE
     Boost::boost ${Boost_LIBRARIES}
 )
 
-nanobind_add_module(PythonCxx python.cpp)
+nanobind_add_module(PythonCxx STABLE_ABI NB_STATIC python.cpp)
 target_link_libraries(PythonCxx PRIVATE LibCxx)
 
 qt_standard_project_setup()
