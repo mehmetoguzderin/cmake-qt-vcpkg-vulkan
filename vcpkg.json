@@ -2,19 +2,7 @@
     "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
     "dependencies": [
         "7zip",
-        {
-            "name": "boost",
-            "features": [
-                "mpi"
-            ]
-        },
         "boost-interprocess",
-        {
-            "name": "boost-python",
-            "features": [
-                "python3"
-            ]
-        },
         "dcmtk",
         {
             "name": "qtbase",
@@ -31,7 +19,6 @@
                 "zstd"
             ]
         },
-        "python3",
         "qtwebchannel",
         "qtwebsockets",
         "qtwebview",
@@ -41,7 +28,7 @@
         "sqlite3",
         "taskflow",
         "tinyfiledialogs",
-        "tiff",
-        "vulkan"
+        "vulkan",
+        "zlib"
     ]
 }

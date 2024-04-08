@@ -30,9 +30,11 @@ find_package(spirv_cross_reflect CONFIG REQUIRED)
 find_package(spirv_cross_util CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(Taskflow CONFIG REQUIRED)
-find_package(TIFF REQUIRED)
+# find_package(TIFF REQUIRED)
 find_package(tinyfiledialogs CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
+# zlib
+find_package(ZLIB REQUIRED)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nanobind)
 
@@ -67,9 +69,11 @@ target_link_libraries(MainCxx PRIVATE
     unofficial::shaderc::shaderc
     spirv-cross-core spirv-cross-glsl spirv-cross-msl
     spirv-cross-reflect spirv-cross-util
-    Taskflow::Taskflow TIFF::TIFF
+    Taskflow::Taskflow
+    # TIFF::TIFF
     Vulkan::Vulkan
     tinyfiledialogs::tinyfiledialogs
+    ZLIB::ZLIB
 )
 
 install(TARGETS MainCxx

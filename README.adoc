@@ -79,3 +79,23 @@ cmake --build ./build --config Release
 ....
 cmake --install ./build --config Release --prefix $PWD/install/
 ....
+
+== Notes
+
+* If there is a problematic package within transitive dependencies, you can check for it with the help of `jq` using the following command (please replace `liblzma` with the package name you are looking for):
++
+....
+jq -r '.dependencies[] | if type == "object" then .name + (if .features then "[" + (.features | join(",")) + "]" else "" end) else . end' vcpkg.jsonc | while read pkg; do
+    echo "Checking $pkg for liblzma dependency..."
+    if ./vcpkg/vcpkg depend-info $pkg 2>&1 | grep -q 'liblzma'; then
+        echo "$pkg directly or indirectly depends on liblzma."
+    else
+        echo "$pkg does not depend on liblzma."
+    fi
+done
+....
+* Reincorporation of following packages depends on `liblzma` to become available again:
+** `+boost[mpi]+`
+** `+boost-python+`
+** `+python3+`
+** `+tiff+`
