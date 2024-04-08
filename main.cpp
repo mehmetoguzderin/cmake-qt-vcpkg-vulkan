@@ -1367,6 +1367,8 @@ static void messageHandler(QtMsgType msgType,
     oldMessageHandler(msgType, logContext, text);
 }
 
+void myFunction();
+
 int main(int argc, char *argv[]) {
   QApplication app(argc, argv);
 
@@ -1397,8 +1399,13 @@ int main(int argc, char *argv[]) {
 
   mainWindow.resize(1024, 768);
   mainWindow.show();
-
+  
+  QTimer::singleShot(0, &myFunction);
   return app.exec();
+}
+
+void myFunction() {
+  std::cout << "myFunction()" << std::endl;
 }
 
 #include "main.moc"
