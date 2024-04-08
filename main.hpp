@@ -76,8 +76,6 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/euler_angles.hpp>
 
-#include <tiffio.h>
-
 #include <taskflow/taskflow.hpp>
 
 #include <taskflow/algorithm/for_each.hpp>
