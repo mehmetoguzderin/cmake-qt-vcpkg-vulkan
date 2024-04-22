@@ -82,6 +82,15 @@ cmake --install ./build --config Release --prefix $PWD/install/
 
 == Notes
 
+* Conda environment for versioning Python
++
+....
+conda create --prefix .conda python=3.12
+conda activate ./.conda
+conda env export > environment.yml
+conda env create --prefix ./.conda -f environment.yml
+conda activate ./.conda
+....
 * If there is a problematic package within transitive dependencies, you can check for it with the help of `jq` using the following command (please replace `liblzma` with the package name you are looking for):
 +
 ....
