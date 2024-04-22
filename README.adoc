@@ -21,6 +21,7 @@ git clone --recurse-submodules https://github.com/mehmetoguzderin/cmake-qt-vcpkg
 * Clangd
 * Clang-Format
 * Clang-Tidy
+* Conda
 
 The following subsections only contain installs for packages that cause errors during build without clear instructions, especially from localization and windowing libraries. Please closely follow vcpkg outputs for any potential additional dependencies that may be necessary, as some packages can have specific requirements depending on the platform.
 
