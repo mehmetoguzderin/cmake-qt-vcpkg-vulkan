@@ -1,0 +1,7 @@
+name: ./.conda
+channels:
+  - conda-forge
+dependencies:
+  - pip=24.0
+  - python=3.12.3
+prefix: ./.conda
