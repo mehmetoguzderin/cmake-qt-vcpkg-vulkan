@@ -80,6 +80,14 @@ cmake --install ./build --config Release --prefix $PWD/install/
 
 == Notes
 
+* Devcontainer configuration to run Docker with GPUs
++
+....
+"runArgs": [
+    "--gpus",
+    "all"
+]
+....
 * Conda environment for versioning Python
 +
 ....
