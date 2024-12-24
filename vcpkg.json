@@ -29,6 +29,7 @@
         "taskflow",
         "tinyfiledialogs",
         "vulkan",
+        "zfp",
         "zlib"
     ]
 }
