@@ -4,6 +4,7 @@
         "7zip",
         "boost-interprocess",
         "dcmtk",
+        "gtk",
         {
             "name": "qtbase",
             "features": [
