@@ -29,6 +29,12 @@
         "taskflow",
         "tinyfiledialogs",
         "vulkan",
+        {
+            "name": "wxwidgets",
+            "features": [
+                "fonts"
+            ]
+        },
         "zfp",
         "zlib"
     ]
