@@ -4,7 +4,9 @@
         "7zip",
         "boost-interprocess",
         "dcmtk",
+        "folly",
         "gtk",
+        "lfreist-hwinfo",
         {
             "name": "qtbase",
             "features": [
