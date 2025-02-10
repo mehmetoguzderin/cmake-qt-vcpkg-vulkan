@@ -8,6 +8,12 @@
         "gtk",
         "lfreist-hwinfo",
         {
+            "name": "openxr-loader",
+            "features": [
+                "vulkan"
+            ]
+        },
+        {
             "name": "qtbase",
             "features": [
                 "jpeg",
