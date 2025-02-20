@@ -8,6 +8,12 @@
         "gtk",
         "lfreist-hwinfo",
         {
+            "name": "openvdb",
+            "features": [
+                "nanovdb"
+            ]
+        },
+        {
             "name": "openxr-loader",
             "features": [
                 "vulkan"
