@@ -10,6 +10,7 @@
         },
         "boost-interprocess",
         "cachelib",
+        "cli11",
         "dcmtk",
         "folly",
         "gtk",
