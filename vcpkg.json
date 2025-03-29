@@ -2,7 +2,14 @@
     "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
     "dependencies": [
         "7zip",
+        {
+            "name": "abseil",
+            "features": [
+                "cxx17"
+            ]
+        },
         "boost-interprocess",
+        "cachelib",
         "dcmtk",
         "folly",
         "gtk",
