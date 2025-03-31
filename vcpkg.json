@@ -18,7 +18,8 @@
         {
             "name": "openvdb",
             "features": [
-                "nanovdb"
+                "nanovdb",
+                "nanovdb-tools"
             ]
         },
         {
